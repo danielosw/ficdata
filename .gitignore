@@ -1,0 +1,10 @@
+/.vscode
+/target
+test.html
+log.txt
+*out*
+/*output*
+.vscode
+.vscode/launch.json
+.idea
+test_log.txt
