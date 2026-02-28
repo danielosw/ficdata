@@ -18,7 +18,9 @@ rayon = "1.11.0"
 parking_lot = "0.12.5"
 bzip2 = { version = "0.6.1", features = ["bzip2-sys"] }
 thiserror = "2.0.18"
+diesel = { version = "2.2.0", features = ["postgres"] }
 
+dotenvy = "0.15"
 [lints.rust]
 non_snake_case = { level = "allow" }
 
