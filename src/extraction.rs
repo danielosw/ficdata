@@ -21,6 +21,12 @@ fn normalize_text(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn strip_tags(input: &str) -> String {
+    static TAG_REGEX: OnceLock<Regex> = OnceLock::new();
+    let tag_regex = TAG_REGEX.get_or_init(|| Regex::new(r"(?is)<[^>]+>").expect("valid tag regex"));
+    normalize_text(&tag_regex.replace_all(input, " "))
+}
+
 fn first_text(document: &Html, selector: &str) -> Result<Option<String>, FicDataError> {
     let selector = parse_selector(selector)?;
     Ok(document
@@ -43,8 +49,20 @@ fn parse_number(input: Option<String>) -> Option<u32> {
     input.and_then(|value| value.replace(',', "").parse::<u32>().ok())
 }
 
+fn parse_labeled_dd(html: &str, label: &str) -> Result<Option<String>, FicDataError> {
+    let pattern = format!(
+        r"(?is)<dt>\s*{}\s*:?\s*</dt>\s*<dd>\s*(.*?)\s*</dd>",
+        regex::escape(label)
+    );
+    let regex = Regex::new(&pattern).map_err(|e| FicDataError::RegexError(e.to_string()))?;
+    Ok(regex
+        .captures(html)
+        .and_then(|captures| captures.get(1).map(|m| strip_tags(m.as_str())))
+        .filter(|s| !s.is_empty()))
+}
+
 fn parse_title(document: &Html) -> Result<String, FicDataError> {
-    if let Some(title) = first_text(document, "h1.title, h2.title")? {
+    if let Some(title) = first_text(document, "div.meta h1, h1.title, h2.title")? {
         return Ok(title);
     }
     if let Some(title) = first_text(document, "title")? {
@@ -100,6 +118,13 @@ fn parse_last_updated(document: &Html, html: &str) -> Result<String, FicDataErro
             }
         }
     }
+    if let Some(stats) = parse_labeled_dd(html, "Stats")? {
+        if let Some(captures) = date_regex.captures(&stats) {
+            if let Some(date) = captures.get(1) {
+                return Ok(date.as_str().to_string());
+            }
+        }
+    }
 
     if let Some(captures) = date_regex.captures(html) {
         if let Some(date) = captures.get(1) {
@@ -108,6 +133,15 @@ fn parse_last_updated(document: &Html, html: &str) -> Result<String, FicDataErro
     }
 
     Ok(String::new())
+}
+
+fn parse_stats_value(stats: &str, key: &str) -> Result<Option<String>, FicDataError> {
+    let pattern = format!(r"(?i)\b{}\s*:\s*([0-9][0-9,]*/?[0-9?]*)", regex::escape(key));
+    let regex = Regex::new(&pattern).map_err(|e| FicDataError::RegexError(e.to_string()))?;
+    Ok(regex
+        .captures(stats)
+        .and_then(|captures| captures.get(1).map(|m| normalize_text(m.as_str())))
+        .filter(|s| !s.is_empty()))
 }
 
 fn insert_tag_group(document: &Html, tags: &mut TagMap, css_group: &str, output_key: &str) -> Result<(), FicDataError> {
@@ -137,19 +171,31 @@ pub fn extract_metadata_from_downloaded_html(html: &str) -> Result<FicMetadata, 
     insert_tag_group(&document, &mut tags, "relationship", "relationships")?;
     insert_tag_group(&document, &mut tags, "character", "characters")?;
     insert_tag_group(&document, &mut tags, "freeform", "freeforms")?;
+    if let Some(rating) = parse_labeled_dd(html, "Rating")? {
+        tags.entry("rating".to_string()).or_default().push(rating);
+    }
+    if let Some(warning) = parse_labeled_dd(html, "Archive Warning")? {
+        tags.entry("warnings".to_string()).or_default().push(warning);
+    }
+    if let Some(fandom) = parse_labeled_dd(html, "Fandom")? {
+        tags.entry("fandoms".to_string()).or_default().push(fandom);
+    }
 
     let description = first_text(
         &document,
-        "blockquote.userstuff.summary, .summary blockquote.userstuff, blockquote.summary",
+        "blockquote.userstuff.summary, .summary blockquote.userstuff, blockquote.summary, #preface .meta blockquote.userstuff",
     )?
     .unwrap_or_default();
     let authors = collect_text(&document, "a[rel='author'], h2.byline a")?;
     let fandom = tags.get("fandoms").cloned().unwrap_or_default();
     let ship_type = tags.get("categories").cloned().unwrap_or_default();
-    let language = first_text(&document, "dd.language")?;
-    let chapters = first_text(&document, "dd.chapters")?;
+    let stats = parse_labeled_dd(html, "Stats")?;
+    let language = first_text(&document, "dd.language")?.or(parse_labeled_dd(html, "Language")?);
+    let chapters = first_text(&document, "dd.chapters")?
+        .or_else(|| stats.clone().and_then(|value| parse_stats_value(&value, "Chapters").ok().flatten()));
     let kudos = parse_number(first_text(&document, "dd.kudos")?);
-    let words = parse_number(first_text(&document, "dd.words")?);
+    let words = parse_number(first_text(&document, "dd.words")?)
+        .or_else(|| stats.clone().and_then(|value| parse_stats_value(&value, "Words").ok().flatten()).and_then(|v| parse_number(Some(v))));
     let hits = parse_number(first_text(&document, "dd.hits")?);
     let series = collect_text(&document, "dd.series a, li.series a")?;
 
@@ -238,5 +284,58 @@ mod tests {
         assert_eq!(metadata.url, "https://archiveofourown.org/works/7777");
         assert_eq!(metadata.name, "Fallback Title");
         assert_eq!(metadata.last_updated, "2019-01-20");
+    }
+
+    #[test]
+    fn extracts_metadata_from_ao3_download_export_layout() {
+        let html = r##"
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test - Azutoi - test - Fandom</title>
+</head>
+<body>
+<div id="preface">
+  <p class="message">
+    Posted originally on the <a href="https://archiveofourown.org/">Archive of Our Own</a> at
+    <a href="https://archiveofourown.org/works/81658676">https://archiveofourown.org/works/81658676</a>.
+  </p>
+  <div class="meta">
+    <dl class="tags">
+      <dt>Rating:</dt>
+      <dd><a href="https://archiveofourown.org/tags/Not%20Rated">Not Rated</a></dd>
+      <dt>Archive Warning:</dt>
+      <dd><a href="#">Creator Chose Not To Use Archive Warnings</a></dd>
+      <dt>Fandom:</dt>
+      <dd><a href="#">test - Fandom</a></dd>
+      <dt>Language:</dt>
+      <dd>Français</dd>
+      <dt>Stats:</dt>
+      <dd>
+        Published: 2026-03-22
+        Words: 1
+        Chapters: 1/1
+      </dd>
+    </dl>
+    <h1>Test</h1>
+    <div class="byline">by <a rel="author" href="#">Azutoi</a></div>
+    <blockquote class="userstuff"><p>Résumé test.</p></blockquote>
+  </div>
+</div>
+</body>
+</html>
+        "##;
+
+        let metadata = extract_metadata_from_downloaded_html(html).expect("metadata should parse");
+        assert_eq!(metadata.id, "81658676");
+        assert_eq!(metadata.url, "https://archiveofourown.org/works/81658676");
+        assert_eq!(metadata.name, "Test");
+        assert_eq!(metadata.last_updated, "2026-03-22");
+        assert_eq!(metadata.authors, vec!["Azutoi"]);
+        assert_eq!(metadata.language.as_deref(), Some("Français"));
+        assert_eq!(metadata.words, Some(1));
+        assert_eq!(metadata.chapters.as_deref(), Some("1/1"));
+        assert_eq!(metadata.fandom, vec!["test - Fandom"]);
+        assert_eq!(metadata.tags["rating"], vec!["Not Rated"]);
     }
 }
