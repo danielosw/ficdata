@@ -1,6 +1,17 @@
 use crate::{errors::FicDataError, metadata::FicMetadata, metadata::TagMap};
 use regex::Regex;
 use scraper::{Html, Selector};
+use std::sync::OnceLock;
+
+fn work_id_regex() -> &'static Regex {
+    static WORK_ID_REGEX: OnceLock<Regex> = OnceLock::new();
+    WORK_ID_REGEX.get_or_init(|| Regex::new(r"/works/(\d+)").expect("valid work id regex"))
+}
+
+fn date_regex() -> &'static Regex {
+    static DATE_REGEX: OnceLock<Regex> = OnceLock::new();
+    DATE_REGEX.get_or_init(|| Regex::new(r"\b(\d{4}-\d{2}-\d{2})\b").expect("valid date regex"))
+}
 
 fn parse_selector(selector: &str) -> Result<Selector, FicDataError> {
     Selector::parse(selector).map_err(|e| FicDataError::SelectorError(e.to_string()))
@@ -50,7 +61,7 @@ fn parse_title(document: &Html) -> Result<String, FicDataError> {
 
 fn parse_id_and_url(document: &Html, html: &str) -> Result<(String, String), FicDataError> {
     let selector = parse_selector("a[href*='/works/'], link[href*='/works/']")?;
-    let id_regex = Regex::new(r"/works/(\d+)").map_err(|e| FicDataError::RegexError(e.to_string()))?;
+    let id_regex = work_id_regex();
 
     let href = document
         .select(&selector)
@@ -79,8 +90,7 @@ fn parse_id_and_url(document: &Html, html: &str) -> Result<(String, String), Fic
 }
 
 fn parse_last_updated(document: &Html, html: &str) -> Result<String, FicDataError> {
-    let date_regex =
-        Regex::new(r"\b(\d{4}-\d{2}-\d{2})\b").map_err(|e| FicDataError::RegexError(e.to_string()))?;
+    let date_regex = date_regex();
     for selector in ["dd.status", "dd.updated", "dd.published", "li.stats dd"] {
         if let Some(value) = first_text(document, selector)? {
             if let Some(captures) = date_regex.captures(&value) {
