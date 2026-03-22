@@ -28,11 +28,13 @@
 
 // Module declarations
 mod errors;
+pub mod extraction;
 pub mod metadata;
 pub mod persistence;
 
 // Re-export commonly used types and functions
 pub use errors::FicDataError;
+pub use extraction::extract_metadata_from_downloaded_html;
 pub use metadata::{FicMetadata, TagMap, merge_tag};
 pub use persistence::{
     get_next_version, load_metadata, save_metadata, should_download_fic,

@@ -13,6 +13,7 @@ on for personal use.
 - **Version Tracking**: Automatic versioning when fics are updated
 - **JSON Persistence**: Save and load metadata to/from JSON files
 - **Update Detection**: Check if fics have been updated since last download
+- **Offline Recovery**: Extract metadata from previously downloaded AO3 HTML files
 
 ## Installation
 
@@ -63,6 +64,17 @@ if should_download_fic("./output", &metadata).unwrap_or(true) {
 } else {
     println!("Fic is up-to-date.");
 }
+```
+
+### Recovering Metadata from Downloaded HTML
+
+```rust
+use ficdata::extract_metadata_from_downloaded_html;
+
+let html = std::fs::read_to_string("./12345.html").unwrap();
+let metadata = extract_metadata_from_downloaded_html(&html).unwrap();
+
+assert_eq!(metadata.id, "12345");
 ```
 
 ## Data Structures
