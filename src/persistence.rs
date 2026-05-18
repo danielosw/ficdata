@@ -6,6 +6,7 @@ use crate::{errors::FicDataError, metadata::FicMetadata};
 use std::{
     fs,
     io::{Read, Write},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 /// Load fic metadata from JSON file in the output directory
@@ -24,21 +25,9 @@ use std::{
 pub fn load_metadata(output_dir: &str) -> Vec<FicMetadata> {
     let metadata_path = format!("{}/fics_metadata.json", output_dir);
     let bzip2_path = format!("{}/fics_metadata.json.bz2", output_dir);
-    if fs::metadata(&bzip2_path).is_ok() {
-        // If we have a bzip2 compressed file, read and decompress it
-        let compressed_data = fs::read(&bzip2_path).unwrap_or_else(|_| Vec::new());
-        let decompressed_data = bzip2::read::BzDecoder::new(&compressed_data[..]);
-        let mut content = String::new();
-        std::io::BufReader::new(decompressed_data)
-            .read_to_string(&mut content)
-            .unwrap_or(0);
-        serde_json::from_str(&content).unwrap_or_else(|_| Vec::new())
-    } else if fs::metadata(&metadata_path).is_ok() {
-        let content = fs::read_to_string(&metadata_path).unwrap_or_else(|_| "[]".to_string());
-        serde_json::from_str(&content).unwrap_or_else(|_| Vec::new())
-    } else {
-        Vec::new()
-    }
+    load_from_bzip2(&bzip2_path)
+        .or_else(|| load_from_json(&metadata_path))
+        .unwrap_or_default()
 }
 
 /// Save fic metadata to JSON file
@@ -63,13 +52,44 @@ pub fn save_metadata(output_dir: &str, metadata: &[FicMetadata]) -> Result<(), F
     let bzip2_path = format!("{}/fics_metadata.json.bz2", output_dir);
 
     let json = serde_json::to_string_pretty(metadata)?;
+    let json_bytes = json.as_bytes();
 
-    fs::write(&metadata_path, json)?;
+    write_atomic(&metadata_path, json_bytes)?;
     // Also write a bzip2 compressed version
     let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::best());
-    encoder.write_all(fs::read(&metadata_path)?.as_slice())?;
+    encoder.write_all(json_bytes)?;
     let compressed_data = encoder.finish()?;
-    fs::write(&bzip2_path, compressed_data)?;
+    write_atomic(&bzip2_path, compressed_data.as_slice())?;
+    Ok(())
+}
+
+fn load_from_bzip2(path: &str) -> Option<Vec<FicMetadata>> {
+    let compressed_data = fs::read(path).ok()?;
+    let decompressed_data = bzip2::read::BzDecoder::new(&compressed_data[..]);
+    let mut content = String::new();
+    std::io::BufReader::new(decompressed_data)
+        .read_to_string(&mut content)
+        .ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn load_from_json(path: &str) -> Option<Vec<FicMetadata>> {
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn write_atomic(path: &str, data: &[u8]) -> Result<(), FicDataError> {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let tmp_path = format!("{path}.tmp.{suffix}");
+
+    fs::write(&tmp_path, data)?;
+    if let Err(err) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err.into());
+    }
     Ok(())
 }
 
