@@ -12,12 +12,17 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
+    thread,
+    time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 const METADATA_SQLITE_FILENAME: &str = "fics_metadata.sqlite";
 const METADATA_JSON_FILENAME: &str = "fics_metadata.json";
 const METADATA_JSON_BZ2_FILENAME: &str = "fics_metadata.json.bz2";
+const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
+const SQLITE_LOCK_RETRY_ATTEMPTS: u8 = 3;
+const SQLITE_LOCK_RETRY_DELAY_MS: u64 = 250;
 
 diesel::table! {
     fics_metadata (id, version) {
@@ -208,6 +213,7 @@ fn output_file_path(output_dir: &str, file_name: &str) -> PathBuf {
 
 fn connect_metadata_db(output_dir: &str) -> Result<SqliteConnection, FicDataError> {
     let mut conn = SqliteConnection::establish(&metadata_sqlite_path(output_dir))?;
+    conn.batch_execute(&format!("PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS};"))?;
     conn.batch_execute(
         "CREATE TABLE IF NOT EXISTS fics_metadata (
             id TEXT NOT NULL,
@@ -230,6 +236,30 @@ fn connect_metadata_db(output_dir: &str) -> Result<SqliteConnection, FicDataErro
         );",
     )?;
     Ok(conn)
+}
+
+fn is_sqlite_lock_error(err: &FicDataError) -> bool {
+    let error_message = err.to_string().to_ascii_lowercase();
+    error_message.contains("database is locked")
+        || error_message.contains("database table is locked")
+        || error_message.contains("database schema is locked")
+}
+
+fn with_sqlite_lock_retry<T, F>(mut operation: F) -> Result<T, FicDataError>
+where
+    F: FnMut() -> Result<T, FicDataError>,
+{
+    let mut retries = 0;
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(err) if is_sqlite_lock_error(&err) && retries < SQLITE_LOCK_RETRY_ATTEMPTS => {
+                retries += 1;
+                thread::sleep(Duration::from_millis(SQLITE_LOCK_RETRY_DELAY_MS));
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 fn parse_json_field<T: DeserializeOwned>(raw: &str, field_name: &str) -> Result<T, FicDataError> {
@@ -284,32 +314,36 @@ fn to_row(fic: &FicMetadata) -> Result<NewFicMetadataRow, FicDataError> {
 fn load_from_sqlite(output_dir: &str) -> Result<Vec<FicMetadata>, FicDataError> {
     use self::fics_metadata::dsl::*;
 
-    let mut conn = connect_metadata_db(output_dir)?;
-    let rows = fics_metadata
-        .order((id.asc(), version.asc()))
-        .select(FicMetadataRow::as_select())
-        .load::<FicMetadataRow>(&mut conn)?;
+    with_sqlite_lock_retry(|| {
+        let mut conn = connect_metadata_db(output_dir)?;
+        let rows = fics_metadata
+            .order((id.asc(), version.asc()))
+            .select(FicMetadataRow::as_select())
+            .load::<FicMetadataRow>(&mut conn)?;
 
-    rows.into_iter().map(FicMetadata::try_from).collect()
+        rows.into_iter().map(FicMetadata::try_from).collect()
+    })
 }
 
 fn save_to_sqlite(output_dir: &str, metadata: &[FicMetadata]) -> Result<(), FicDataError> {
     use self::fics_metadata::dsl::*;
 
-    let mut conn = connect_metadata_db(output_dir)?;
-    conn.transaction(|conn| {
-        diesel::delete(fics_metadata).execute(conn)?;
+    with_sqlite_lock_retry(|| {
+        let mut conn = connect_metadata_db(output_dir)?;
+        conn.transaction(|conn| {
+            diesel::delete(fics_metadata).execute(conn)?;
 
-        if !metadata.is_empty() {
-            let rows: Vec<NewFicMetadataRow> = metadata
-                .iter()
-                .map(to_row)
-                .collect::<Result<Vec<_>, FicDataError>>()?;
-            diesel::insert_into(fics_metadata)
-                .values(&rows)
-                .execute(conn)?;
-        }
-        Ok(())
+            if !metadata.is_empty() {
+                let rows: Vec<NewFicMetadataRow> = metadata
+                    .iter()
+                    .map(to_row)
+                    .collect::<Result<Vec<_>, FicDataError>>()?;
+                diesel::insert_into(fics_metadata)
+                    .values(&rows)
+                    .execute(conn)?;
+            }
+            Ok(())
+        })
     })
 }
 
