@@ -4,7 +4,7 @@
 //!
 //! This library provides data structures and utilities for:
 //! - Managing fic metadata with versioning support
-//! - Persisting metadata to JSON files
+//! - Persisting metadata to SQLite with legacy JSON compatibility
 //! - Checking for fic updates
 //!
 //! For HTML extraction and scraping functionality, see the `ficscrape` crate.

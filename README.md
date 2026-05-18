@@ -11,7 +11,9 @@ on for personal use.
 - **Metadata Management**: Load, save, and update fic metadata with versioning
   support
 - **Version Tracking**: Automatic versioning when fics are updated
-- **JSON Persistence**: Save and load metadata to/from JSON files
+- **SQLite Persistence**: Save and load metadata from a local SQLite file
+- **Format Compatibility**: Automatically imports legacy JSON metadata and
+  keeps JSON/bzip2 exports updated for backwards compatibility
 - **Update Detection**: Check if fics have been updated since last download
 
 ## Installation
@@ -109,9 +111,9 @@ values.
 ### Persistence Functions
 
 - `load_metadata(output_dir: &str) -> Vec<FicMetadata>` - Load metadata from
-  JSON
+  SQLite (or import legacy JSON automatically)
 - `save_metadata(output_dir: &str, metadata: &[FicMetadata]) -> Result<(), FicDataError>` -
-  Save metadata to JSON
+  Save metadata to SQLite and compatibility JSON exports
 - `update_fic_metadata(output_dir: &str, fic: FicMetadata) -> Result<(), FicDataError>` -
   Add/update a fic's metadata
 - `update_existing_metadata_fields(output_dir: &str, new_fic: &FicMetadata) -> Result<(), FicDataError>` -
@@ -121,13 +123,16 @@ values.
 
 - `should_download_fic(output_dir: &str, fic_metadata: &FicMetadata) -> Result<bool, FicDataError>` -
   Check if fic needs downloading
-- `get_next_version(metadatafile: &str, fic_id: &str) -> u32` - Get next version
+- `get_next_version(output_dir: &str, fic_id: &str) -> u32` - Get next version
   number
 
-## Metadata File Format
+## Metadata Storage
 
-Metadata is stored in `fics_metadata.json` in the output directory as a JSON
-array:
+Primary storage is `fics_metadata.sqlite` in the output directory. For
+backwards compatibility, `fics_metadata.json` and `fics_metadata.json.bz2` are
+also maintained automatically.
+
+Legacy JSON format (still supported):
 
 ```json
 [

@@ -9,6 +9,10 @@ pub enum FicDataError {
     SerdeError(#[from] serde_json::Error),
     #[error("io error: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("database error: {0}")]
+    DieselError(#[from] diesel::result::Error),
+    #[error("database connection error: {0}")]
+    DieselConnectionError(#[from] diesel::ConnectionError),
     #[error("{0}")]
     GenericError(String),
 }

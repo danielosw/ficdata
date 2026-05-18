@@ -7,11 +7,12 @@ use std::{collections::HashMap, fs};
 /// Type alias for tag mapping: category name -> list of tag values
 pub type TagMap = HashMap<String, Vec<String>>;
 
-/// Metadata for a fic that gets saved to JSON
+/// Metadata for a fic that gets saved to the metadata store
 ///
 /// This structure is used to track information about processed fics.
-/// The metadata is saved to `fics_metadata.json` in the output directory
-/// and is updated as fics are downloaded.
+/// The metadata is saved to `fics_metadata.sqlite` in the output directory
+/// and is updated as fics are downloaded. Legacy JSON files are still
+/// supported for compatibility.
 ///
 /// # Fields
 /// * `id` - The numeric ID of the fic from its URL
